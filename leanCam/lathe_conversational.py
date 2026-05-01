@@ -1,5 +1,9 @@
 
 
+# Module for G-code generator and parameter validation for conversational routines
+#
+
+
 # for debugging within Wing IDE
 try:
     import wingdbstub

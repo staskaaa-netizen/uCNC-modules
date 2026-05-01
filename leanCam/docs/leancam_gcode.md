@@ -33,11 +33,11 @@ For each cycle, the caller resolves:
 * active setup: last `SETUP` line above the cycle
 * active tool: last `TOOL` line above the cycle
 
-The tool line supplies fallback `S`, `R_FEED`, `FIN_FEED`, `R_DOC`, and `FIN_DOC`. The converter also accepts the older long names as aliases.
+The tool line supplies fallback `S`, `R_FEED`, `FIN_FEED`, `R_DOC`, `FIN_DOC`, and display/comment metadata such as `T` and tool diameter. The converter also accepts the older long names as aliases.
 
-## Preamble
+## Preamble And Program Files
 
-Each emitted cycle currently starts with:
+The single-line/run-now path emits a complete wrapper around one cycle:
 
 ```gcode
 G21
@@ -47,6 +47,20 @@ S800 M3
 ```
 
 The spindle speed comes from the active tool or the cycle override when present.
+
+The file generator uses a larger program pass:
+
+* load and validate every cycle before opening the `.nc` output
+* emit the modal setup once at the top of the file
+* emit cycle comments and `S... M3` per cycle so tool/spindle context remains visible
+* emit one final footer:
+
+```gcode
+M5
+M30
+```
+
+This keeps generated files easier to inspect and avoids leaving a partial `.nc` when one later cycle has bad input.
 
 ## Supported Cycle Fields
 
@@ -121,13 +135,22 @@ Optional:
 * `PECK`
 * `FEED`
 * `S`, `RPM`, or `SPINDLE_RPM`
+* tool diameter from `TD`, `TOOL_DIAMETER`, `TOOL_DIA`, `DIA`, `DIAMETER`, or `D`
 
 Validation:
 
 * `FEED > 0`
 * `PECK >= 0`
+* target Z must be below `Z1`
+* peck output is capped so very small pecks fail instead of blocking generation
 
 Positive `DEPTH` is interpreted as distance from `Z1`; negative `DEPTH` is interpreted as an absolute target Z.
+
+The first emitted drill comment includes resolved context when available, for example:
+
+```gcode
+(LC DRILL T3 D 6.000 Z1 0.000 Z -60.000 PECK 5.000 F 90.000)
+```
 
 ### `CUT` / `PART`
 
@@ -164,7 +187,21 @@ Validation:
 
 ## Error Handling
 
-Generation stops on the first failing cycle. The caller reports the line number plus the converter error text and removes the incomplete `.nc` file.
+Generation stops on the first failing cycle. File generation preflights the whole `.lcam` before creating output, so bad geometry, unsupported cycles, malformed numbers, excessive pecks, or missing setup are reported with the LeanCam line number before a partial `.nc` is written. If storage rejects a write after the file is opened, the caller removes the incomplete `.nc` file.
+
+## Host Safety Tests
+
+A small host-side test harness exercises the supported cycles plus common bad inputs:
+
+```powershell
+gcc -std=c99 -Wall -Wextra -IuCNC/src/modules/leanCam `
+  uCNC/src/modules/leanCam/tests/leancam_gcode_host_test.c `
+  uCNC/src/modules/leanCam/leancam_gcode.c `
+  -o $env:TEMP\leancam_gcode_host_test.exe
+& $env:TEMP\leancam_gcode_host_test.exe
+```
+
+The tests check that normal OD/ID/FACE/DRILL/CUT/PART/GROOVE cycles emit output, while malformed numbers, missing setup, impossible geometry, unsupported cycles, excessive pecks, and oversized values fail cleanly. They also check the program-file wrapper so the shared header/footer path does not drift away from the single-cycle path.
 
 ## Output Policy
 

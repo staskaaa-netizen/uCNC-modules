@@ -15,6 +15,30 @@
 #define SIM_AREA_W          (SIM_AREA_X1 - SIM_AREA_X0 + 1)
 #define SIM_AREA_H          (SIM_AREA_Y1 - SIM_AREA_Y0 + 1)
 
+#define SIM_LIVE_X0            0
+#define SIM_LIVE_Y0            0
+#define SIM_LIVE_X1         1023
+#define SIM_LIVE_Y1          599
+#define SIM_LIVE_W          (SIM_LIVE_X1 - SIM_LIVE_X0 + 1)
+#define SIM_LIVE_H          (SIM_LIVE_Y1 - SIM_LIVE_Y0 + 1)
+#define SIM_LIVE_STOCK_TOP    92
+#define SIM_LIVE_RIGHT_MARGIN 76
+#define SIM_LIVE_BOTTOM_MARGIN 86
+#define SIM_LIVE_LEFT_MARGIN  50
+#define SIM_LIVE_ADDR        RA_PAGE_BASE(2)
+#define SIM_LIVE_TOOL_MIN      2
+#define SIM_LIVE_TOOL_MAX     36
+#define SIM_LIVE_REMOVE_MAX  180
+#define SIM_LIVE_REMOVE_BIAS   2
+#define SIM_LIVE_TEXT_X        18
+#define SIM_LIVE_STATUS_Y1      8
+#define SIM_LIVE_STATUS_Y2     42
+#define SIM_LIVE_TEXT_H        82
+#define SIM_LIVE_RT_X_RADIUS   1
+#define SIM_LIVE_DOC_DIAM_FACTOR 1.0f
+#define SIM_LIVE_DOC_Z_FACTOR  1.0f
+#define SIM_TOOL_ADDR          RA_PAGE_BASE(3)
+
 #define SIM_STOCK_TOP        200
 #define SIM_RIGHT_MARGIN      70
 #define SIM_BOTTOM_MARGIN     80
@@ -28,8 +52,11 @@
 #define SIM_COL_AXIS     RA_WHITE
 #define SIM_COL_DIM      RA_CYAN
 #define SIM_COL_HI       RA_YELLOW
-#define SIM_COL_CHUCK    RA_DGRAY
+#define SIM_COL_CHUCK    RA_BLUE
 #define SIM_COL_CHUCK_FILL 0xC618
+#define SIM_COL_REMOVED  SIM_COL_BG
+#define SIM_COL_TOOL     RA_RED
+#define SIM_COL_WARN     RA_YELLOW
 
 #define SIM_LC_MODE_PROGRAM  2u
 #define SIM_LC_MODE_DRAFT    3u
@@ -38,13 +65,13 @@
 #define SIM_CHUCK_H          30
 
 #define SIM_LABEL_Z1_DX     -48
-#define SIM_LABEL_Z1_DY      -4
+#define SIM_LABEL_Z1_DY      -30
 #define SIM_LABEL_D1_DX     -48
-#define SIM_LABEL_D1_DY     -20
+#define SIM_LABEL_D1_DY       -2
 #define SIM_LABEL_Z2_DX     -48
-#define SIM_LABEL_Z2_DY      -4
+#define SIM_LABEL_Z2_DY      -30
 #define SIM_LABEL_D2_DX     -48
-#define SIM_LABEL_D2_DY     -20
+#define SIM_LABEL_D2_DY       -2
 
 typedef struct
 {
@@ -139,6 +166,36 @@ static bool sim_field_float3(const char *line, const char *a, const char *b, con
     return sim_field_float(line, a, out) || sim_field_float(line, b, out) || sim_field_float(line, c, out);
 }
 
+static bool sim_field_uint(const char *line, const char *name, unsigned *out)
+{
+    char buf[16];
+    char *s;
+    char *endp;
+    unsigned long v;
+
+    if (!out || !sim_get_field_text(line, name, buf, sizeof(buf)))
+        return false;
+
+    s = buf;
+    while (*s == ' ') s++;
+    if (*s == '(') s++;
+    if (*s == '*' || *s == 0)
+        return false;
+
+    v = strtoul(s, &endp, 10);
+    if (endp == s)
+        return false;
+
+    *out = (unsigned)v;
+    return true;
+}
+
+static bool sim_field_tool_diameter(const char *line, float *out)
+{
+    return sim_field_float3(line, "TD", "TOOL_DIAMETER", "TOOL_DIA", out) ||
+           sim_field_float3(line, "DIA", "DIAMETER", "D", out);
+}
+
 static void sim_read_setup(const ui_snapshot_frame_t *frame, sim_setup_t *setup)
 {
     const char *line = frame ? frame->leancam_setup_line : NULL;
@@ -158,11 +215,11 @@ static void sim_read_setup(const ui_snapshot_frame_t *frame, sim_setup_t *setup)
     (void)sim_field_float2(line, "CLAMP", "CLAMP_LENGTH", &setup->clamp);
     (void)sim_field_float2(line, "EXTRA", "EXTRA_LENGTH", &setup->extra);
 
-    if (setup->length <= 0.0f) setup->length = 100.0f;
-    if (setup->od <= 0.0f) setup->od = 50.0f;
-    if (setup->id < 0.0f) setup->id = 0.0f;
-    if (setup->clamp < 0.0f) setup->clamp = 0.0f;
-    if (setup->extra < 0.0f) setup->extra = 0.0f;
+    if (setup->length != setup->length || setup->length <= 0.0f) setup->length = 100.0f;
+    if (setup->od != setup->od || setup->od <= 0.0f) setup->od = 50.0f;
+    if (setup->id != setup->id || setup->id < 0.0f) setup->id = 0.0f;
+    if (setup->clamp != setup->clamp || setup->clamp < 0.0f) setup->clamp = 0.0f;
+    if (setup->extra != setup->extra || setup->extra < 0.0f) setup->extra = 0.0f;
 }
 
 static void sim_build_view(const sim_setup_t *setup, lcam_sim_view_t *view)
@@ -170,6 +227,7 @@ static void sim_build_view(const sim_setup_t *setup, lcam_sim_view_t *view)
     float visible_len;
     float z_scale;
     float d_scale;
+    float fit_scale;
     int stock_h;
     int stock_w;
     int usable_w;
@@ -188,9 +246,12 @@ static void sim_build_view(const sim_setup_t *setup, lcam_sim_view_t *view)
     d_scale = (float)usable_h / setup->od;
     if (z_scale <= 0.0f) z_scale = 1.0f;
     if (d_scale <= 0.0f) d_scale = 1.0f;
+    fit_scale = (z_scale < d_scale) ? z_scale : d_scale;
+    if (fit_scale != fit_scale || fit_scale <= 0.0f)
+        fit_scale = 1.0f;
 
-    stock_w = (int)(visible_len * z_scale + 0.5f);
-    stock_h = (int)(setup->od * d_scale + 0.5f);
+    stock_w = (int)(visible_len * fit_scale + 0.5f);
+    stock_h = (int)(setup->od * fit_scale + 0.5f);
     if (stock_w < 1) stock_w = 1;
     if (stock_h < 1) stock_h = 1;
     if (stock_w > usable_w) stock_w = usable_w;
@@ -208,12 +269,69 @@ static void sim_build_view(const sim_setup_t *setup, lcam_sim_view_t *view)
     view->stock_bottom = SIM_STOCK_TOP + stock_h;
     if (view->stock_bottom > SIM_AREA_Y1 - SIM_BOTTOM_MARGIN)
         view->stock_bottom = SIM_AREA_Y1 - SIM_BOTTOM_MARGIN;
-    view->z_zero_x = sim_clampi(view->stock_left + (int)(setup->length * z_scale + 0.5f),
+    view->z_zero_x = sim_clampi(view->stock_left + (int)(setup->length * fit_scale + 0.5f),
                                 view->stock_left,
                                 view->stock_right);
 
-    view->z_scale = z_scale;
-    view->d_scale = d_scale;
+    view->z_scale = fit_scale;
+    view->d_scale = fit_scale;
+    view->stock_len = visible_len;
+    view->stock_od = setup->od;
+}
+
+static void sim_build_live_view(const sim_setup_t *setup, lcam_sim_view_t *view)
+{
+    float visible_len;
+    float z_scale;
+    float d_scale;
+    float fit_scale;
+    int stock_h;
+    int stock_w;
+    int usable_w;
+    int usable_h;
+
+    visible_len = setup->length + setup->extra;
+    if (visible_len <= 0.0f)
+        visible_len = 100.0f;
+
+    usable_w = (SIM_LIVE_X1 - SIM_LIVE_RIGHT_MARGIN) - (SIM_LIVE_X0 + SIM_LIVE_LEFT_MARGIN);
+    usable_h = (SIM_LIVE_Y1 - SIM_LIVE_BOTTOM_MARGIN) - SIM_LIVE_STOCK_TOP;
+    if (usable_w < 1) usable_w = 1;
+    if (usable_h < 1) usable_h = 1;
+
+    z_scale = (float)usable_w / visible_len;
+    d_scale = (float)usable_h / setup->od;
+    if (z_scale <= 0.0f) z_scale = 1.0f;
+    if (d_scale <= 0.0f) d_scale = 1.0f;
+    fit_scale = (z_scale < d_scale) ? z_scale : d_scale;
+    if (fit_scale != fit_scale || fit_scale <= 0.0f)
+        fit_scale = 1.0f;
+
+    stock_w = (int)(visible_len * fit_scale + 0.5f);
+    stock_h = (int)(setup->od * fit_scale + 0.5f);
+    if (stock_w < 1) stock_w = 1;
+    if (stock_h < 1) stock_h = 1;
+    if (stock_w > usable_w) stock_w = usable_w;
+    if (stock_h > usable_h) stock_h = usable_h;
+
+    view->x0 = SIM_LIVE_X0;
+    view->y0 = SIM_LIVE_Y0;
+    view->x1 = SIM_LIVE_X1;
+    view->y1 = SIM_LIVE_Y1;
+    view->stock_left = SIM_LIVE_X0 + SIM_LIVE_LEFT_MARGIN;
+    view->stock_right = view->stock_left + stock_w;
+    if (view->stock_right > SIM_LIVE_X1 - SIM_LIVE_RIGHT_MARGIN)
+        view->stock_right = SIM_LIVE_X1 - SIM_LIVE_RIGHT_MARGIN;
+    view->stock_top = SIM_LIVE_STOCK_TOP;
+    view->stock_bottom = SIM_LIVE_STOCK_TOP + stock_h;
+    if (view->stock_bottom > SIM_LIVE_Y1 - SIM_LIVE_BOTTOM_MARGIN)
+        view->stock_bottom = SIM_LIVE_Y1 - SIM_LIVE_BOTTOM_MARGIN;
+    view->z_zero_x = sim_clampi(view->stock_left + (int)(setup->length * fit_scale + 0.5f),
+                                view->stock_left,
+                                view->stock_right);
+
+    view->z_scale = fit_scale;
+    view->d_scale = fit_scale;
     view->stock_len = visible_len;
     view->stock_od = setup->od;
 }
@@ -238,6 +356,22 @@ int sim_d_to_py(const lcam_sim_view_t *view, float d)
 
     y = view->stock_top + (int)(d * view->d_scale + 0.5f);
     return sim_clampi(y, view->stock_top, view->stock_bottom);
+}
+
+static int sim_live_z_to_px_raw(const lcam_sim_view_t *view, float z)
+{
+    if (!view)
+        return 0;
+
+    return view->z_zero_x + (int)(z * view->z_scale + ((z >= 0.0f) ? 0.5f : -0.5f));
+}
+
+static int sim_live_d_to_py_raw(const lcam_sim_view_t *view, float d)
+{
+    if (!view)
+        return 0;
+
+    return view->stock_top + (int)(d * view->d_scale + 0.5f);
 }
 
 static void sim_textf(int x, int y, uint16_t fg, uint16_t bg, const char *fmt, ...)
@@ -284,11 +418,11 @@ static void sim_draw_stock(const lcam_sim_view_t *view, const sim_setup_t *setup
                  view->stock_bottom + SIM_AXIS_EXT,
                  SIM_COL_AXIS);
 
-    sim_textf(z0_x - 18, view->stock_top - 18, SIM_COL_DIM, SIM_COL_BG, "Z0");
-    sim_textf(view->stock_left + 6, view->stock_top - 18, SIM_COL_DIM, SIM_COL_BG, "Z-%.0f", (double)view->stock_len);
+    sim_textf(z0_x - 18, view->stock_top - 30, SIM_COL_DIM, SIM_COL_BG, "Z0");
+    sim_textf(view->stock_left + 6, view->stock_top - 30, SIM_COL_DIM, SIM_COL_BG, "Z-%.0f", (double)view->stock_len);
     sim_textf(view->stock_right + 6, view->stock_top - 6, SIM_COL_DIM, SIM_COL_BG, "X0");
     if (setup->extra > 0.0f)
-        sim_textf(z0_x + 5, view->stock_top - 22, SIM_COL_DIM, SIM_COL_BG, "EX %.1f", (double)setup->extra);
+        sim_textf(z0_x + 5, view->stock_top - 60, SIM_COL_DIM, SIM_COL_BG, "EX %.1f", (double)setup->extra);
 
     sim_textf(view->stock_left + 6, view->stock_bottom + SIM_CHUCK_H + 10, SIM_COL_DIM, SIM_COL_BG, "L %.1f", (double)setup->length);
     sim_textf(view->stock_left + 86, view->stock_bottom + SIM_CHUCK_H + 10, SIM_COL_DIM, SIM_COL_BG, "OD %.1f", (double)setup->od);
@@ -381,8 +515,8 @@ static void sim_draw_status_message(const ui_snapshot_frame_t *frame)
     const char *msg = (frame && frame->leancam_message[0]) ? frame->leancam_message : "LC: ready";
 
     ra_fill_rect(SIM_AREA_X0, SIM_AREA_Y0, SIM_AREA_X1, SIM_AREA_Y1, SIM_COL_BG);
-    sim_textf(SIM_AREA_X0 + 20, SIM_AREA_Y0 + 34, SIM_COL_DIM, SIM_COL_BG, "G-code generator");
-    sim_textf(SIM_AREA_X0 + 20, SIM_AREA_Y0 + 58, SIM_COL_AXIS, SIM_COL_BG, "%-48.48s", msg);
+    sim_textf(SIM_AREA_X0 + 20, SIM_AREA_Y0 + 30, SIM_COL_DIM, SIM_COL_BG, "G-code generator");
+    sim_textf(SIM_AREA_X0 + 20, SIM_AREA_Y0 + 60, SIM_COL_AXIS, SIM_COL_BG, "%-48.48s", msg);
 }
 
 static bool sim_preview_sources_changed(const ui_snapshot_frame_t *frame,
@@ -414,28 +548,37 @@ static void sim_store_preview_sources(const ui_snapshot_frame_t *frame,
     ui_snapshot_strcpy(last_tool, frame->leancam_tool_line, UI_LC_LINE_LEN);
 }
 
-static void sim_draw_corner_label(const lcam_sim_view_t *view, int x, int y, const char *name, float v, int dx, int dy)
+static void sim_draw_corner_label(const lcam_sim_view_t *view, int x, int y, const char *label, int dx, int dy)
 {
     int tx = sim_clampi(x + dx, view->x0 + 2, view->x1 - 70);
     int ty = sim_clampi(y + dy, view->y0 + 2, view->y1 - 18);
 
-    sim_textf(tx, ty, SIM_COL_DIM, SIM_COL_BG, "%s %.2f", name, (double)v);
+    sim_textf(tx, ty, SIM_COL_DIM, SIM_COL_BG, "%s", label ? label : "");
+}
+
+static void sim_format_corner_label(char *dst, unsigned dst_len, const char *name, float v)
+{
+    if (!dst || !dst_len)
+        return;
+
+    snprintf(dst, dst_len, "%s %.2f", name ? name : "", (double)v);
+    dst[dst_len - 1] = 0;
 }
 
 static void sim_draw_dz_corner_labels(const lcam_sim_view_t *view,
                                       int start_x,
                                       int start_y,
-                                      float d1,
-                                      float z1,
+                                      const char *z1_label,
+                                      const char *d1_label,
                                       int end_x,
                                       int end_y,
-                                      float d2,
-                                      float z2)
+                                      const char *z2_label,
+                                      const char *d2_label)
 {
-    sim_draw_corner_label(view, start_x, start_y, "Z1", z1, SIM_LABEL_Z1_DX, SIM_LABEL_Z1_DY);
-    sim_draw_corner_label(view, start_x, start_y, "D1", d1, SIM_LABEL_D1_DX, SIM_LABEL_D1_DY);
-    sim_draw_corner_label(view, end_x, end_y, "Z2", z2, SIM_LABEL_Z2_DX, SIM_LABEL_Z2_DY);
-    sim_draw_corner_label(view, end_x, end_y, "D2", d2, SIM_LABEL_D2_DX, SIM_LABEL_D2_DY);
+    sim_draw_corner_label(view, start_x, start_y, z1_label, SIM_LABEL_Z1_DX, SIM_LABEL_Z1_DY);
+    sim_draw_corner_label(view, start_x, start_y, d1_label, SIM_LABEL_D1_DX, SIM_LABEL_D1_DY);
+    sim_draw_corner_label(view, end_x, end_y, z2_label, SIM_LABEL_Z2_DX, SIM_LABEL_Z2_DY);
+    sim_draw_corner_label(view, end_x, end_y, d2_label, SIM_LABEL_D2_DX, SIM_LABEL_D2_DY);
 }
 
 static void sim_draw_od_preview(const lcam_sim_view_t *view, const char *line, const ui_snapshot_frame_t *frame)
@@ -455,6 +598,10 @@ static void sim_draw_od_preview(const lcam_sim_view_t *view, const char *line, c
     int label_y2;
     int tmp;
     int spacing = 0;
+    char z1_label[24];
+    char d1_label[24];
+    char z2_label[24];
+    char d2_label[24];
 
     if (!sim_field_float2(line, "D1", "DIAMETER_1", &d1)) return;
     if (!sim_field_float2(line, "D2", "DIAMETER_2", &d2)) return;
@@ -479,8 +626,12 @@ static void sim_draw_od_preview(const lcam_sim_view_t *view, const char *line, c
         spacing = (int)(sim_absf(doc) * view->d_scale + 0.5f);
     if (spacing <= 0) spacing = 4;
 
+    sim_format_corner_label(z1_label, sizeof(z1_label), "Z1", z1);
+    sim_format_corner_label(d1_label, sizeof(d1_label), "D1", d1);
+    sim_format_corner_label(z2_label, sizeof(z2_label), "Z2", z2);
+    sim_format_corner_label(d2_label, sizeof(d2_label), "D2", d2);
     sim_draw_hatch_rect(x1, y1, x2, y2, spacing, false);
-    sim_draw_dz_corner_labels(view, label_x1, label_y1, d1, z1, label_x2, label_y2, d2, z2);
+    sim_draw_dz_corner_labels(view, label_x1, label_y1, z1_label, d1_label, label_x2, label_y2, z2_label, d2_label);
 }
 
 static void sim_draw_id_preview(const lcam_sim_view_t *view, const char *line, const ui_snapshot_frame_t *frame)
@@ -500,6 +651,10 @@ static void sim_draw_id_preview(const lcam_sim_view_t *view, const char *line, c
     int label_y2;
     int tmp;
     int spacing = 0;
+    char z1_label[24];
+    char d1_label[24];
+    char z2_label[24];
+    char d2_label[24];
 
     if (!sim_field_float2(line, "D1", "DIAMETER_1", &d1)) return;
     if (!sim_field_float2(line, "D2", "DIAMETER_2", &d2)) return;
@@ -524,8 +679,12 @@ static void sim_draw_id_preview(const lcam_sim_view_t *view, const char *line, c
         spacing = (int)(sim_absf(doc) * view->d_scale + 0.5f);
     if (spacing <= 0) spacing = 4;
 
+    sim_format_corner_label(z1_label, sizeof(z1_label), "Z1", z1);
+    sim_format_corner_label(d1_label, sizeof(d1_label), "D1", d1);
+    sim_format_corner_label(z2_label, sizeof(z2_label), "Z2", z2);
+    sim_format_corner_label(d2_label, sizeof(d2_label), "D2", d2);
     sim_draw_hatch_rect(x1, y1, x2, y2, spacing, false);
-    sim_draw_dz_corner_labels(view, label_x1, label_y1, d1, z1, label_x2, label_y2, d2, z2);
+    sim_draw_dz_corner_labels(view, label_x1, label_y1, z1_label, d1_label, label_x2, label_y2, z2_label, d2_label);
 }
 
 static void sim_draw_face_preview(const lcam_sim_view_t *view, const char *line, const ui_snapshot_frame_t *frame)
@@ -544,6 +703,9 @@ static void sim_draw_face_preview(const lcam_sim_view_t *view, const char *line,
     int tmp;
     float doc;
     int spacing = 0;
+    char z1_label[24];
+    char z_label[24];
+    char d_label[24];
 
     if (!sim_field_float3(line, "D", "OD", "OUTER_DIAMETER", &d)) d = view->stock_od;
     (void)sim_field_float2(line, "Z1", "Z_1", &z1);
@@ -564,8 +726,11 @@ static void sim_draw_face_preview(const lcam_sim_view_t *view, const char *line,
         spacing = (int)(sim_absf(doc) * view->d_scale + 0.5f);
     if (spacing <= 0) spacing = 4;
 
+    sim_format_corner_label(z1_label, sizeof(z1_label), "Z1", z1);
+    sim_format_corner_label(z_label, sizeof(z_label), "Z", z);
+    sim_format_corner_label(d_label, sizeof(d_label), "D", d);
     sim_draw_hatch_rect(x1, view->stock_top, x2, y2, spacing, true);
-    sim_draw_dz_corner_labels(view, label_x1, label_y1, d1, z1, label_x2, label_y2, d, z);
+    sim_draw_dz_corner_labels(view, label_x1, label_y2, z1_label, d_label, label_x2, label_y1, z_label, "");
 }
 
 static void sim_draw_groove_preview(const lcam_sim_view_t *view, const char *line)
@@ -579,6 +744,8 @@ static void sim_draw_groove_preview(const lcam_sim_view_t *view, const char *lin
     int y1;
     int y2;
     int tmp;
+    char d1_label[24];
+    char d2_label[24];
 
     if (!sim_field_float(line, "D1", &d1)) return;
     if (!sim_field_float(line, "D2", &d2)) return;
@@ -594,9 +761,405 @@ static void sim_draw_groove_preview(const lcam_sim_view_t *view, const char *lin
     if (x2 <= x1) x2 = x1 + 1;
     if (y2 <= y1) y2 = y1 + 1;
 
+    sim_format_corner_label(d1_label, sizeof(d1_label), "D1", d1);
+    sim_format_corner_label(d2_label, sizeof(d2_label), "D2", d2);
     sim_draw_hatch_rect(x1, y1, x2, y2, 4, true);
-    sim_draw_corner_label(view, x1, y1, "D1", d1, -54, -18);
-    sim_draw_corner_label(view, x2, y2, "D2", d2, 6, 4);
+    sim_draw_corner_label(view, x1, y1, d1_label, -54, -18);
+    sim_draw_corner_label(view, x2, y2, d2_label, 6, 4);
+}
+
+static void sim_draw_drill_preview(const lcam_sim_view_t *view, const char *line, const ui_snapshot_frame_t *frame)
+{
+    float z1;
+    float depth;
+    float target;
+    float tool_d = 0.0f;
+    float tool_r;
+    int x1;
+    int x2;
+    int y1;
+    int y2;
+    int tmp;
+    char z1_label[24];
+    char z2_label[24];
+    char d_label[24];
+
+    if (!sim_field_float2(line, "Z1", "Z_START", &z1)) return;
+    if (!sim_field_float(line, "DEPTH", &depth)) return;
+
+    target = (depth <= 0.0f) ? depth : (z1 - depth);
+    if (target >= z1)
+        return;
+
+    if (!sim_field_tool_diameter(line, &tool_d) &&
+        frame && !sim_field_tool_diameter(frame->leancam_tool_line, &tool_d))
+        tool_d = view->stock_od * 0.12f;
+
+    if (tool_d != tool_d || tool_d <= 0.0f)
+        tool_d = view->stock_od * 0.12f;
+    if (tool_d > view->stock_od)
+        tool_d = view->stock_od;
+    tool_r = tool_d * 0.5f;
+
+    x1 = sim_z_to_px(view, z1);
+    x2 = sim_z_to_px(view, target);
+    y1 = view->stock_top;
+    y2 = sim_d_to_py(view, tool_r);
+
+    if (x2 < x1) { tmp = x1; x1 = x2; x2 = tmp; }
+    if (x2 <= x1) x2 = x1 + 1;
+    if (y2 <= y1) y2 = y1 + 1;
+
+    ra_fill_rect((uint16_t)x1, (uint16_t)y1, (uint16_t)x2, (uint16_t)y2, SIM_COL_HI);
+    ra_draw_rect((uint16_t)x1, (uint16_t)y1, (uint16_t)x2, (uint16_t)y2, RA_BLACK);
+
+    sim_format_corner_label(z1_label, sizeof(z1_label), "Z1", z1);
+    sim_format_corner_label(z2_label, sizeof(z2_label), "Z", target);
+    sim_format_corner_label(d_label, sizeof(d_label), "TD", tool_d);
+    sim_draw_corner_label(view, sim_z_to_px(view, z1), y2, z1_label, 6, 4);
+    sim_draw_corner_label(view, sim_z_to_px(view, target), y2, z2_label, -54, 4);
+    sim_draw_corner_label(view, x1, y2, d_label, 6, 20);
+}
+
+typedef struct
+{
+    bool initialized;
+    bool have_prev;
+    char setup_line[UI_LC_LINE_LEN];
+    sim_setup_t setup;
+    lcam_sim_view_t view;
+    int doc_x_px;
+    int doc_z_px;
+    int sprite_x_px;
+    int sprite_z_px;
+    float prev_x;
+    float prev_z;
+} sim_live_state_t;
+
+static sim_live_state_t g_live_sim;
+
+static bool sim_live_signature_changed(const ui_snapshot_frame_t *frame)
+{
+    if (!frame)
+        return false;
+
+    return strcmp(g_live_sim.setup_line, frame->leancam_setup_line) != 0 ||
+           frame->leancam_setup_line[0] == 0;
+}
+
+static void sim_live_store_signature(const ui_snapshot_frame_t *frame)
+{
+    if (!frame)
+        return;
+
+    ui_snapshot_strcpy(g_live_sim.setup_line, frame->leancam_setup_line, sizeof(g_live_sim.setup_line));
+}
+
+static float sim_live_runtime_x_to_diam(float runtime_x)
+{
+#if SIM_LIVE_RT_X_RADIUS
+    return runtime_x * 2.0f;
+#else
+    return runtime_x;
+#endif
+}
+
+static float sim_live_doc_from_frame(const ui_snapshot_frame_t *frame)
+{
+    float doc = 0.0f;
+
+    if (!frame)
+        return 0.5f;
+
+    if (!sim_field_float3(frame->leancam_preview_line, "DOC", "R_DOC", "ROUGH_DOC", &doc) &&
+        !sim_field_float3(frame->leancam_tool_line, "R_DOC", "ROUGH_DOC", "ROUGH_DEPTH_OF_CUT", &doc))
+        doc = 0.5f;
+
+    return sim_absf(doc);
+}
+
+static void sim_live_update_doc_px(const ui_snapshot_frame_t *frame)
+{
+    float doc = sim_live_doc_from_frame(frame);
+    int x_px = (int)(doc * g_live_sim.view.d_scale * SIM_LIVE_DOC_DIAM_FACTOR + 0.999f);
+    int z_px = (int)(doc * g_live_sim.view.z_scale * SIM_LIVE_DOC_Z_FACTOR + 0.999f);
+
+    g_live_sim.doc_x_px = sim_clampi(x_px, SIM_LIVE_TOOL_MIN, SIM_LIVE_REMOVE_MAX);
+    g_live_sim.doc_z_px = sim_clampi(z_px, SIM_LIVE_TOOL_MIN, SIM_LIVE_REMOVE_MAX);
+}
+
+static void sim_live_build_tool_sprite(void)
+{
+    uint32_t old_draw_base;
+    int w = g_live_sim.doc_z_px;
+    int h = g_live_sim.doc_x_px;
+
+    if (g_live_sim.sprite_z_px == w && g_live_sim.sprite_x_px == h)
+        return;
+
+    old_draw_base = ra_get_draw_base();
+    ra_set_draw_base(SIM_TOOL_ADDR);
+    ra_fill_rect(0, 0, (uint16_t)(w - 1), (uint16_t)(h - 1), SIM_COL_TOOL);
+    ra_draw_line(0, 0, w - 1, 0, SIM_COL_WARN);
+    ra_draw_line(0, 0, 0, h - 1, SIM_COL_WARN);
+    ra_set_draw_base(old_draw_base);
+
+    g_live_sim.sprite_z_px = w;
+    g_live_sim.sprite_x_px = h;
+}
+
+static void sim_live_init_canvas(const ui_snapshot_frame_t *frame)
+{
+    uint32_t old_draw_base;
+
+    sim_read_setup(frame, &g_live_sim.setup);
+    sim_build_live_view(&g_live_sim.setup, &g_live_sim.view);
+    sim_live_store_signature(frame);
+    sim_live_update_doc_px(frame);
+    g_live_sim.sprite_x_px = 0;
+    g_live_sim.sprite_z_px = 0;
+    g_live_sim.have_prev = false;
+    sim_live_build_tool_sprite();
+
+    old_draw_base = ra_get_draw_base();
+    ra_set_draw_base(SIM_LIVE_ADDR);
+    sim_draw_stock(&g_live_sim.view, &g_live_sim.setup);
+    sim_draw_chuck(&g_live_sim.view, &g_live_sim.setup);
+    ra_set_draw_base(old_draw_base);
+
+    g_live_sim.initialized = true;
+}
+
+static unsigned sim_live_tool_from_frame(const ui_snapshot_frame_t *frame)
+{
+    unsigned tool = 0;
+
+    if (!frame)
+        return 0;
+
+    (void)sim_field_uint(frame->leancam_tool_line, "T", &tool);
+    return tool;
+}
+
+static float sim_live_surface_speed(float x_diam, unsigned spindle)
+{
+    if (x_diam != x_diam || x_diam <= 0.0f || spindle == 0)
+        return 0.0f;
+
+    return (float)(3.14159265f * x_diam * (float)spindle * 0.001f);
+}
+
+static void sim_live_draw_text(float x_diam,
+                               float z_pos,
+                               float feed,
+                               unsigned spindle,
+                               float doc,
+                               unsigned tool)
+{
+    float surface = sim_live_surface_speed(x_diam, spindle);
+
+    ra_fill_rect(SIM_LIVE_X0,
+                 SIM_LIVE_Y0,
+                 SIM_LIVE_X1,
+                 SIM_LIVE_TEXT_H,
+                 SIM_COL_BG);
+    sim_textf(SIM_LIVE_TEXT_X,
+              SIM_LIVE_STATUS_Y1,
+              SIM_COL_AXIS,
+              SIM_COL_BG,
+              "X %.3f  Z %.3f  T%u  DOC %.3f",
+              (double)x_diam,
+              (double)z_pos,
+              tool,
+              (double)doc);
+    sim_textf(SIM_LIVE_TEXT_X,
+              SIM_LIVE_STATUS_Y2,
+              SIM_COL_DIM,
+              SIM_COL_BG,
+              "F %.1f  S %u  V %.1f m/min",
+              (double)feed,
+              spindle,
+              (double)surface);
+}
+
+static bool sim_live_in_stock_z(const lcam_sim_view_t *view, float z)
+{
+    int px;
+
+    if (!view)
+        return false;
+
+    px = sim_live_z_to_px_raw(view, z);
+    return px >= view->stock_left && px <= view->stock_right;
+}
+
+static void sim_live_draw_removal(float x_diam, float z_pos)
+{
+    const lcam_sim_view_t *view = &g_live_sim.view;
+    int px;
+    int py;
+    int ppx;
+    int ppy;
+    int x1;
+    int x2;
+    int y1;
+    int y2;
+    int pad;
+    int tmp;
+
+    if (x_diam != x_diam || z_pos != z_pos)
+        return;
+
+    if (x_diam < 0.0f)
+        x_diam = 0.0f;
+
+    px = sim_live_z_to_px_raw(view, z_pos);
+    py = sim_live_d_to_py_raw(view, x_diam);
+
+    if (!g_live_sim.have_prev)
+    {
+        g_live_sim.prev_x = x_diam;
+        g_live_sim.prev_z = z_pos;
+        g_live_sim.have_prev = true;
+        return;
+    }
+
+    ppx = sim_z_to_px(view, g_live_sim.prev_z);
+    ppy = sim_d_to_py(view, g_live_sim.prev_x);
+
+    if (x_diam <= view->stock_od && g_live_sim.prev_x <= view->stock_od &&
+        (sim_live_in_stock_z(view, z_pos) || sim_live_in_stock_z(view, g_live_sim.prev_z)))
+    {
+        x1 = ppx;
+        x2 = px;
+        y1 = ppy < py ? ppy : py;
+        y2 = view->stock_bottom;
+        if (x2 < x1) { tmp = x1; x1 = x2; x2 = tmp; }
+
+        pad = g_live_sim.doc_z_px + SIM_LIVE_REMOVE_BIAS - 1;
+        if (pad < 1)
+            pad = 1;
+
+        x1 = sim_clampi(x1, view->stock_left, view->stock_right);
+        x2 = sim_clampi(x2 + pad, view->stock_left, view->stock_right);
+        y1 = sim_clampi(y1, view->stock_top, view->stock_bottom);
+        y2 = sim_clampi(y2, view->stock_top, view->stock_bottom);
+
+        if (x2 >= x1 && y2 >= y1)
+            ra_fill_rect((uint16_t)x1, (uint16_t)y1, (uint16_t)x2, (uint16_t)y2, SIM_COL_REMOVED);
+    }
+
+    g_live_sim.prev_x = x_diam;
+    g_live_sim.prev_z = z_pos;
+}
+
+static bool sim_live_tool_in_chuck(float z_pos)
+{
+    const lcam_sim_view_t *view = &g_live_sim.view;
+    int chuck_right;
+    int px;
+
+    if (g_live_sim.setup.clamp <= 0.0f)
+        return false;
+
+    chuck_right = view->stock_left + (int)(g_live_sim.setup.clamp * view->z_scale + 0.5f);
+    px = sim_live_z_to_px_raw(view, z_pos);
+    return px <= chuck_right;
+}
+
+static void sim_live_draw_marker(uint32_t dst_base, float x_diam, float z_pos)
+{
+    const lcam_sim_view_t *view = &g_live_sim.view;
+    int px = sim_live_z_to_px_raw(view, z_pos);
+    int py = sim_live_d_to_py_raw(view, x_diam);
+    int w = g_live_sim.doc_z_px;
+    int h = g_live_sim.doc_x_px;
+    bool chuck_warn = sim_live_tool_in_chuck(z_pos);
+
+    if (chuck_warn && g_live_sim.setup.clamp > 0.0f)
+    {
+        int chuck_w = (int)(g_live_sim.setup.clamp * view->z_scale + 0.5f);
+        int c = ((mcu_millis() / 250U) & 1U) ? SIM_COL_WARN : RA_RED;
+        chuck_w = sim_clampi(chuck_w, 10, 90);
+        uint32_t old_draw_base = ra_get_draw_base();
+        ra_set_draw_base(dst_base);
+        ra_fill_rect((uint16_t)view->stock_left,
+                     (uint16_t)(view->stock_bottom + 1),
+                     (uint16_t)(view->stock_left + chuck_w),
+                     (uint16_t)(view->stock_bottom + SIM_CHUCK_H),
+                     (uint16_t)c);
+        sim_textf(view->stock_left + 3, view->stock_bottom + 10, RA_BLACK, (uint16_t)c, "CL %.1f", (double)g_live_sim.setup.clamp);
+        ra_set_draw_base(old_draw_base);
+    }
+
+    ra_blit(SIM_TOOL_ADDR,
+            0,
+            0,
+            dst_base,
+            (uint16_t)sim_clampi(px, view->x0, view->x1),
+            (uint16_t)sim_clampi(py, view->y0, view->y1),
+            (uint16_t)w,
+            (uint16_t)h);
+}
+
+void leancam_sim_live_draw(const ui_snapshot_frame_t *frame)
+{
+    uint32_t old_draw_base;
+    float x_diam = 0.0f;
+    float z_pos = 0.0f;
+    float feed = 0.0f;
+    float doc = 0.0f;
+    unsigned spindle = 0;
+    unsigned tool = 0;
+
+    if (!frame || !frame->leancam_active)
+        return;
+
+    if (!g_live_sim.initialized || sim_live_signature_changed(frame))
+        sim_live_init_canvas(frame);
+    else
+    {
+        sim_live_update_doc_px(frame);
+        sim_live_build_tool_sprite();
+    }
+
+    if (frame->axes_valid)
+    {
+        x_diam = sim_live_runtime_x_to_diam(frame->axis[0]);
+        z_pos = frame->axis[2];
+    }
+    if (frame->feed_valid)
+        feed = frame->feed;
+    if (frame->spindle_valid)
+        spindle = (unsigned)frame->spindle;
+    doc = sim_live_doc_from_frame(frame);
+    tool = sim_live_tool_from_frame(frame);
+
+    old_draw_base = ra_get_draw_base();
+    ra_set_draw_base(SIM_LIVE_ADDR);
+    sim_live_draw_removal(x_diam, z_pos);
+    sim_live_draw_text(x_diam, z_pos, feed, spindle, doc, tool);
+    ra_set_draw_base(old_draw_base);
+
+    ra_blit(SIM_LIVE_ADDR,
+            SIM_LIVE_X0,
+            SIM_LIVE_Y0,
+            RA8876_BACKBUF_ADDR,
+            SIM_LIVE_X0,
+            SIM_LIVE_Y0,
+            SIM_LIVE_W,
+            SIM_LIVE_H);
+
+    sim_live_draw_marker(RA8876_BACKBUF_ADDR, x_diam, z_pos);
+
+    ra_blit(RA8876_BACKBUF_ADDR,
+            SIM_LIVE_X0,
+            SIM_LIVE_Y0,
+            RA8876_VISIBLE_ADDR,
+            SIM_LIVE_X0,
+            SIM_LIVE_Y0,
+            SIM_LIVE_W,
+            SIM_LIVE_H);
 }
 
 void leancam_sim_preview_draw(const ui_snapshot_frame_t *frame)
@@ -694,6 +1257,8 @@ void leancam_sim_preview_draw(const ui_snapshot_frame_t *frame)
         sim_draw_id_preview(&view, line, frame);
     else if (sim_is_cycle(line, "FACE"))
         sim_draw_face_preview(&view, line, frame);
+    else if (sim_is_cycle(line, "DRILL"))
+        sim_draw_drill_preview(&view, line, frame);
     else if (sim_is_cycle(line, "GROOVE"))
         sim_draw_groove_preview(&view, line);
 
