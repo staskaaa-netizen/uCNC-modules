@@ -244,3 +244,15 @@ define the position relationship.
 and is not stored as the next modal `G1` feed. This prevents a command such as
 `G33 Z-10 K1 F100` from changing the feed used by the following retract or
 return moves.
+
+At the current implementation, the ELS path has a small transport and processing 
+lag between spindle encoder movement and the corresponding emitted Z-axis step pulse.
+With the current ESP32 + PCNT + I2S architecture, the practical worst-case lag is
+on the order of several to a few dozen microseconds, with ~64 µs being a conservative
+upper bound in the present I2S implementation. At 500 RPM and a 5 mm pitch thread,
+this corresponds to roughly 2–3 µm of instantaneous tool lag behind the spindle’s
+current position. Importantly, this behaves primarily as a dynamic following lag
+rather than an accumulating pitch error, so the generated thread pitch remains 
+effectively correct while the tool follows the spindle slightly behind its
+instantaneous state.
+
