@@ -150,6 +150,36 @@ machine can be in `EXEC_RUN` while the electrical step pin is low between
 pulses; that is expected. Holding the pin active would not create additional
 steps because step/dir drivers count edges/pulses, not "time held high".
 
+### Native GPIO vs buffered outputs
+
+The current ELS generator emits pulses directly with:
+
+```c
+io_set_steps(active);
+mcu_delay_us(G33_ELS_STEP_PULSE_US);
+io_set_steps(idle);
+```
+
+This works best when step pins are native MCU GPIO pins, where `io_set_steps()`
+changes the physical pin immediately.
+
+On buffered or expanded outputs, such as ESP32 I2S step output or shift-register
+based outputs, `io_set_steps()` may only update an intermediate software/output
+buffer. The physical pin changes later when that backend flushes its buffer. If
+the ELS pulse is shorter than that backend update cycle, the active pulse can be
+overwritten by the idle state before it ever appears on the physical pin. The
+symptom is a step pin that appears to stay at idle even though the ELS loop is
+emitting pulses.
+
+For those machines, prefer one of these approaches:
+
+- put the ELS-controlled step pin on native GPIO,
+- route ELS pulse generation through uCNC's normal step ISR/backend,
+- or increase `G33_ELS_STEP_PULSE_US`, accepting a lower maximum step rate.
+
+The current module is the simple direct-pulse version. It is not yet an
+I2S-buffer-aware realtime step backend.
+
 ## `$0` / max step rate
 
 This module uses:
