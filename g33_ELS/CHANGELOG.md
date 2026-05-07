@@ -11,3 +11,5 @@
 - Restores modal motion to `G1` after a completed `G33` pass.
 - Accepts but ignores `F` on `G33` lines so the following modal `G1` feed is
   not changed by an ELS pass.
+- Changed direct pulse output from toggle-based to explicit active/idle step
+  levels and added a direction setup delay before reverse-direction pulses.

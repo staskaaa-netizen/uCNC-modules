@@ -26,7 +26,11 @@
 #endif
 
 #ifndef G33_ELS_STEP_PULSE_US
-#define G33_ELS_STEP_PULSE_US 2UL
+#define G33_ELS_STEP_PULSE_US 5UL
+#endif
+
+#ifndef G33_ELS_DIR_SETUP_US
+#define G33_ELS_DIR_SETUP_US 5UL
 #endif
 
 #ifndef G33_ELS_DEBUG_INTERVAL_MS
@@ -83,9 +87,21 @@ static uint8_t g33_els_stepper_io_mask(uint8_t stepper)
 
 static void g33_els_emit_step(uint8_t stepbits)
 {
-	io_toggle_steps(stepbits);
+	io_set_steps(g_settings.step_invert_mask ^ stepbits);
 	mcu_delay_us(G33_ELS_STEP_PULSE_US);
 	io_set_steps(g_settings.step_invert_mask);
+}
+
+static void g33_els_set_dirs(uint8_t dirbits)
+{
+	static uint8_t last_dirbits;
+
+	if (dirbits != last_dirbits)
+	{
+		io_set_dirs(dirbits);
+		mcu_delay_us(G33_ELS_DIR_SETUP_US);
+		last_dirbits = dirbits;
+	}
 }
 
 static void g33_els_index_cb_handler(void)
@@ -187,7 +203,7 @@ static uint8_t g33_els_direct_motion(int32_t *prev_step_pos, int32_t *next_step_
 		axis_steps[i] = steps;
 	}
 
-	io_set_dirs(forward_dirbits);
+	g33_els_set_dirs(forward_dirbits);
 	io_set_steps(g_settings.step_invert_mask);
 #ifdef ENABLE_STEPPERS_DISABLE_TIMEOUT
 	io_enable_steppers(g_settings.step_enable_invert);
@@ -261,7 +277,7 @@ static uint8_t g33_els_direct_motion(int32_t *prev_step_pos, int32_t *next_step_
 			uint8_t stepbits = 0;
 			bool forward = (wanted_master_steps > emitted_master_steps);
 			int32_t next_master = emitted_master_steps + (forward ? 1 : -1);
-			io_set_dirs(forward ? forward_dirbits : reverse_dirbits);
+			g33_els_set_dirs(forward ? forward_dirbits : reverse_dirbits);
 
 			for (uint8_t i = 0; i < AXIS_TO_STEPPERS; i++)
 			{

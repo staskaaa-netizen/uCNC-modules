@@ -110,10 +110,17 @@ If your uCNC build or branch documents `$0` differently, confirm the units for
 ## Options
 
 ```c
-#define G33_ELS_STEP_PULSE_US 2
+#define G33_ELS_STEP_PULSE_US 5
 ```
 
 Sets the direct step pulse width in microseconds.
+
+```c
+#define G33_ELS_DIR_SETUP_US 5
+```
+
+Sets the delay after changing direction before emitting the next step pulse.
+This matters when the spindle is reversed during a pass.
 
 ```c
 #define G33_ELS_DEBUG
