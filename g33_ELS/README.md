@@ -136,3 +136,7 @@ This module intentionally does not use feed rate `F` for the thread pass. The
 spindle encoder is the clock. `K`, target distance, step/mm, and encoder CPR
 define the position relationship.
 
+`F` is accepted on a `G33` line for sender/post compatibility, but it is ignored
+and is not stored as the next modal `G1` feed. This prevents a command such as
+`G33 Z-10 K1 F100` from changing the feed used by the following retract or
+return moves.

@@ -9,4 +9,5 @@
 - Supports reversing the spindle before the target is reached, moving the axis
   backward along the same thread path.
 - Restores modal motion to `G1` after a completed `G33` pass.
-
+- Accepts but ignores `F` on `G33` lines so the following modal `G1` feed is
+  not changed by an ELS pass.

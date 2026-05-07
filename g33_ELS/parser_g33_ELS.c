@@ -313,9 +313,11 @@ static uint8_t g33_els_direct_motion(int32_t *prev_step_pos, int32_t *next_step_
 #define G33 33
 
 static bool g33_els_parse(void *args);
+static bool g33_els_exec_modifier(void *args);
 static bool g33_els_exec(void *args);
 
 CREATE_EVENT_LISTENER(gcode_parse, g33_els_parse);
+CREATE_EVENT_LISTENER(gcode_exec_modifier, g33_els_exec_modifier);
 CREATE_EVENT_LISTENER(gcode_exec, g33_els_exec);
 
 static bool g33_els_parse(void *args)
@@ -342,6 +344,19 @@ static bool g33_els_parse(void *args)
 		ptr->cmd->group_extended = EXTENDED_MOTION_GCODE(33);
 		*(ptr->error) = STATUS_OK;
 		return EVENT_HANDLED;
+	}
+
+	return EVENT_CONTINUE;
+}
+
+static bool g33_els_exec_modifier(void *args)
+{
+	gcode_exec_args_t *ptr = (gcode_exec_args_t *)args;
+	if (ptr->cmd->group_extended == EXTENDED_MOTION_GCODE(33))
+	{
+		// G33 ELS is spindle-position driven. Accept F on the command for sender
+		// compatibility, but do not let it become the next modal G1 feed.
+		CLEARFLAG(ptr->cmd->words, GCODE_WORD_F);
 	}
 
 	return EVENT_CONTINUE;
@@ -441,6 +456,7 @@ DECL_MODULE(g33_ELS)
 {
 #ifdef ENABLE_PARSER_MODULES
 	ADD_EVENT_LISTENER(gcode_parse, g33_els_parse);
+	ADD_EVENT_LISTENER(gcode_exec_modifier, g33_els_exec_modifier);
 	ADD_EVENT_LISTENER(gcode_exec, g33_els_exec);
 #else
 #error "Parser extensions are not enabled. g33_ELS will not work."
