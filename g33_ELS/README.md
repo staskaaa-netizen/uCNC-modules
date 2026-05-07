@@ -83,6 +83,73 @@ If the spindle stops before the target, motion stops. If the spindle reverses
 before the target, the axis moves backward along the same thread path. After the
 target is reached, further spindle rotation does not move the axis.
 
+## Step generator logic
+
+`g33_ELS` does not produce a timed feed like `G1`. There is no "move at
+F speed" planner segment during the thread pass. Instead, the main G33 loop
+keeps comparing spindle position against the number of motion steps already
+emitted.
+
+The core idea is:
+
+```text
+encoder_delta = current_encoder_count - encoder_count_at_index
+wanted_steps = encoder_delta * steps_per_encoder_count
+missing_steps = wanted_steps - sent_steps
+```
+
+`steps_per_encoder_count` comes from:
+
+```text
+steps_per_rev = total_motion_steps / total_spindle_revolutions
+steps_per_encoder_count = steps_per_rev / encoder_counts_per_rev
+```
+
+Example with `$102 = 200`, `$150 = 4000`, and `G33 Z-10 K1`:
+
+```text
+total_motion_steps = 10 mm * 200 steps/mm = 2000
+total_spindle_revolutions = 10 mm / 1 mm per rev = 10
+steps_per_rev = 2000 / 10 = 200
+steps_per_encoder_count = 200 / 4000 = 0.05
+```
+
+So 20 encoder counts release one Z step.
+
+The loop behaves like this:
+
+```text
+while target is not reached:
+    read encoder count
+    calculate wanted_steps
+
+    while sent_steps is behind wanted_steps:
+        wait until the direct step-rate cap allows another pulse
+        set direction pins
+        emit one step pulse
+        update uCNC realtime step position
+        sent_steps++
+
+    if spindle moved backward:
+        wanted_steps becomes smaller
+        emit reverse pulses until sent_steps matches wanted_steps
+```
+
+The module therefore only emits a pulse when the encoder says the axis should
+be farther along the thread. If the spindle is not moving, `wanted_steps` does
+not change and no new pulses are emitted.
+
+Each emitted step is still a normal step/dir driver pulse:
+
+```text
+idle step level -> active pulse -> idle step level
+```
+
+With `$2 = 0`, the step pin rests low and each step is a short high pulse. The
+machine can be in `EXEC_RUN` while the electrical step pin is low between
+pulses; that is expected. Holding the pin active would not create additional
+steps because step/dir drivers count edges/pulses, not "time held high".
+
 ## `$0` / max step rate
 
 This module uses:
