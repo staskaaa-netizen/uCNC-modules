@@ -16,6 +16,7 @@
 #include "ui_snapshot.h"
 #include "../cam_keyboard/cam_keyboard.h"
 #include "../cam_keyboard/ui_input_keypad.h"
+#include "../encoder.h"
 #include "../leanCam/leancam_bridge.h"
 
 
@@ -35,6 +36,15 @@ SemaphoreHandle_t g_ui_snapshot_mutex = NULL;
 #endif
 
 static char g_ui_popup_text[UI_SNAPSHOT_POPUP_LEN] = {0};
+
+bool __attribute__((weak)) encoder_get_index_debug_line(uint8_t i, char *line, uint32_t line_len, uint32_t *seq)
+{
+    (void)i;
+    (void)line;
+    (void)line_len;
+    (void)seq;
+    return false;
+}
 
 static uint8_t ui_builder_detect_screen_kind_simple(void)
 {
@@ -139,6 +149,7 @@ void ui_snapshot_build_live(void)
     ui_builder_fill_header_footer(&f);
     ui_builder_fill_runtime(&f);
     leancam_bridge_fill_snapshot(&f);
+    encoder_get_index_debug_line(ENC0, f.encoder_debug, sizeof(f.encoder_debug), &f.encoder_debug_seq);
 
     raw = cam_keyboard_raw();
     keych = cam_keyboard_key_char();
@@ -170,6 +181,7 @@ static bool ui_snapshot_builder_update(void *args)
     last_ms = now;
 
     ui_builder_poll_cam_keyboard();
+    leancam_bridge_tick();
     ui_snapshot_build_live();
 
     return EVENT_CONTINUE;

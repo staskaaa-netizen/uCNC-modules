@@ -26,6 +26,10 @@ extern "C" {
 #define UI_SNAPSHOT_GCODE_LEN 96
 #endif
 
+#ifndef UI_SNAPSHOT_ENCODER_DEBUG_LEN
+#define UI_SNAPSHOT_ENCODER_DEBUG_LEN 128
+#endif
+
 typedef enum
 {
     UI_SCREEN_NONE = 0,
@@ -99,6 +103,9 @@ typedef struct
     char leancam_setup_line[UI_LC_LINE_LEN];
     char leancam_preview_line[UI_LC_LINE_LEN];
     char leancam_tool_line[UI_LC_LINE_LEN];
+
+    uint32_t encoder_debug_seq;
+    char encoder_debug[UI_SNAPSHOT_ENCODER_DEBUG_LEN];
 
     /* Optional field-only highlight. Bridge owns these spans.
      * Span is [start, end) in characters inside leancam_lines[row].

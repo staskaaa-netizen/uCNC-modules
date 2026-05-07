@@ -72,6 +72,18 @@ static int32_t current_error;
 static float rpm_to_stepfeed_constant;
 static uint32_t enc_res;
 
+static void g33_reset_index_tracking(void)
+{
+	ATOMIC_CODEBLOCK
+	{
+		spindle_index_counter = 0;
+		spindle_index_step_counter = 0;
+		spindle_index_time = 0;
+		spindle_index_last_time = 0;
+		synched_motion_status = SYNC_DISABLED;
+	}
+}
+
 #if (MCU == MCU_VIRTUAL_WIN)
 // used with the virtual emulator to simulate pulses
 void mcu_stimul_inputs(volatile VIRTUAL_MAP *virtualmap, uint64_t micros)
@@ -161,11 +173,12 @@ void spindle_index_cb_handler(void)
 	}
 
 	spindle_index_counter = index;
+	
 }
 
-#ifdef G33_INDEX_PIN
-CREATE_EVENT_LISTENER(input_change, spindle_index_cb_handler);
-#endif
+
+
+
 
 // this ID must be unique for each code
 #define G33 33
@@ -239,6 +252,7 @@ bool g33_exec(void *args)
 		}
 
 		enc_res = ((uint32_t)g_settings.encoders_resolution[G33_ENCODER]);
+		g33_reset_index_tracking();
 
 		// attach the index event callback
 #if (G33_ENCODER == ENC0)
@@ -604,7 +618,6 @@ CREATE_EVENT_LISTENER(cnc_dotasks, spindle_sync_update_loop);
 
 DECL_MODULE(g33)
 {
-
 #ifdef ENABLE_PARSER_MODULES
 	ADD_EVENT_LISTENER(gcode_parse, g33_parse);
 	ADD_EVENT_LISTENER(gcode_exec, g33_exec);
