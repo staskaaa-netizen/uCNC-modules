@@ -25,6 +25,14 @@
 #error "Encoder 0 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc0
+#ifndef ENC0_VIRTUAL_INDEX_ONLY
+#define ENC0_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC0_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc0_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc0_index)
+#endif
 #elif (ESP32_PCNT_ENC == ENC1)
 #if (ENC1_TYPE != ENC_TYPE_CUSTOM)
 #error "Encoder 1 requires to be of type custom encoder to use ESP32 PCNT"
@@ -36,6 +44,14 @@
 #error "Encoder 1 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc1
+#ifndef ENC1_VIRTUAL_INDEX_ONLY
+#define ENC1_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC1_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc1_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc1_index)
+#endif
 #elif (ESP32_PCNT_ENC == ENC2)
 #if (ENC2_TYPE != ENC_TYPE_CUSTOM)
 #error "Encoder 2 requires to be of type custom encoder to use ESP32 PCNT"
@@ -47,6 +63,14 @@
 #error "Encoder 2 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc2
+#ifndef ENC2_VIRTUAL_INDEX_ONLY
+#define ENC2_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC2_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc2_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc2_index)
+#endif
 #elif (ESP32_PCNT_ENC == ENC3)
 #if (ENC3_TYPE != ENC_TYPE_CUSTOM)
 #error "Encoder 3 requires to be of type custom encoder to use ESP32 PCNT"
@@ -58,6 +82,14 @@
 #error "Encoder 3 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc3
+#ifndef ENC3_VIRTUAL_INDEX_ONLY
+#define ENC3_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC3_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc3_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc3_index)
+#endif
 #elif (ESP32_PCNT_ENC == ENC4)
 #if (ENC4_TYPE != ENC_TYPE_CUSTOM)
 #error "Encoder 4 requires to be of type custom encoder to use ESP32 PCNT"
@@ -69,6 +101,14 @@
 #error "Encoder 4 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc4
+#ifndef ENC4_VIRTUAL_INDEX_ONLY
+#define ENC4_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC4_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc4_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc4_index)
+#endif
 #elif (ESP32_PCNT_ENC == ENC5)
 #if (ENC5_TYPE != ENC_TYPE_CUSTOM)
 #error "Encoder 5 requires to be of type custom encoder to use ESP32 PCNT"
@@ -80,6 +120,14 @@
 #error "Encoder 5 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc5
+#ifndef ENC5_VIRTUAL_INDEX_ONLY
+#define ENC5_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC5_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc5_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc5_index)
+#endif
 #elif (ESP32_PCNT_ENC == ENC6)
 #if (ENC6_TYPE != ENC_TYPE_CUSTOM)
 #error "Encoder 6 requires to be of type custom encoder to use ESP32 PCNT"
@@ -91,6 +139,14 @@
 #error "Encoder 6 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc6
+#ifndef ENC6_VIRTUAL_INDEX_ONLY
+#define ENC6_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC6_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc6_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc6_index)
+#endif
 #elif (ESP32_PCNT_ENC == ENC7)
 #if (ENC7_TYPE != ENC_TYPE_CUSTOM)
 #error "Encoder 7 requires to be of type custom encoder to use ESP32 PCNT"
@@ -102,6 +158,14 @@
 #error "Encoder 7 requires disable wrap correction"
 #endif
 #define esp32_pcnt_read enc_custom_read_enc7
+#ifndef ENC7_VIRTUAL_INDEX_ONLY
+#define ENC7_VIRTUAL_INDEX_ONLY 0
+#endif
+#define ESP32_PCNT_VIRTUAL_INDEX_ONLY ENC7_VIRTUAL_INDEX_ONLY
+#ifdef ESP32_PCNT_INDEX_GPIO
+CREATE_HOOK(enc7_index);
+#define ESP32_PCNT_INDEX_EVENT() HOOK_INVOKE(enc7_index)
+#endif
 #endif
 
 #if (ENCODERS > 0) && (ESP32_PCNT_ENC >= 0)
@@ -210,19 +274,21 @@ static int32_t read_encoder_esp32_pcnt(void)
 	return position;
 }
 
-#if defined(ENC0_INDEX_GPIO) && !ENC0_VIRTUAL_INDEX_ONLY
-static void IRAM_ATTR enc0_index_gpio_isr(void *arg)
+
+#if defined(ESP32_PCNT_INDEX_GPIO) && !ESP32_PCNT_VIRTUAL_INDEX_ONLY
+static void IRAM_ATTR esp32_pcnt_index_gpio_isr(void *arg)
 {
 	int16_t raw = 0;
 	(void)arg;
 	pcnt_get_counter_value((pcnt_unit_t)ESP32_PCNT_UNIT, &raw);
 	encoder_record_index_reference(ENC0, esp32_pcnt_encoder_offset + (int32_t)raw);
+	ESP32_PCNT_INDEX_EVENT();
 }
 
-static void enc0_index_gpio_isr_init(void)
+static void esp32_pcnt_index_gpio_isr_init(void)
 {
-	gpio_set_intr_type((gpio_num_t)ENC0_INDEX_GPIO, GPIO_INTR_POSEDGE);
-	gpio_isr_handler_add((gpio_num_t)ENC0_INDEX_GPIO, enc0_index_gpio_isr, NULL);
+	gpio_set_intr_type((gpio_num_t)__indirect__(ESP32_PCNT_INDEX_GPIO, BIT), GPIO_INTR_POSEDGE);
+	gpio_isr_handler_add((gpio_num_t)__indirect__(ESP32_PCNT_INDEX_GPIO, BIT), esp32_pcnt_index_gpio_isr, NULL);
 }
 #endif
 
@@ -239,9 +305,9 @@ DECL_MODULE(esp32_pcnt_encoder)
 	}
 
 	encoder_esp32_pcnt_init();
-#if defined(ENC0_INDEX_GPIO) && !ENC0_VIRTUAL_INDEX_ONLY
+#if defined(ESP32_PCNT_INDEX_GPIO) && !ESP32_PCNT_VIRTUAL_INDEX_ONLY
 	gpio_install_isr_service(0);
-	enc0_index_gpio_isr_init();
+	esp32_pcnt_index_gpio_isr_init();
 #endif
 	esp32_pcnt_encoder_ready = true;
 }
