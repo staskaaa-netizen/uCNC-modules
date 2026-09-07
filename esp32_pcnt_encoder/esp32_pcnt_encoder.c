@@ -133,7 +133,7 @@
 #error "ESP32_PCNT_PULSE_GPIO must be defined for ESP32 PCNT encoder"
 #endif
 
-#ifndef !defined(ESP32_PCNT_DIR_GPIO) || !ASSERT_PIN_IO(ESP32_PCNT_DIR_GPIO)
+#if !defined(ESP32_PCNT_DIR_GPIO) || !ASSERT_PIN_IO(ESP32_PCNT_DIR_GPIO)
 #error "ESP32_PCNT_DIR_GPIO must be defined for ESP32 PCNT encoder"
 #endif
 
