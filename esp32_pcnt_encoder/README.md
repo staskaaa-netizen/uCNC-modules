@@ -55,6 +55,11 @@ Example for encoder 0:
 
 `ENC0_PULSE_GPIO` is encoder A. `ENC0_DIR_GPIO` is encoder B.
 
+If `ENCx_PULSE` and `ENCx_DIR` resolve to the same GPIO, the PCNT unit operates
+as a simple pulse counter instead of a quadrature counter. It counts falling
+edges by default. Define `ESP32_PCNT_SINGLE_POS_MODE` and
+`ESP32_PCNT_SINGLE_NEG_MODE` to override the PCNT edge modes when needed.
+
 `ENC0_CPR` is only a compile-time fallback. During normal operation the module
 uses `g_settings.encoders_resolution[ENC0]`, which is Grbl/µCNC setting `$150`.
 Set `$150` to the encoder count per revolution used by PCNT0.

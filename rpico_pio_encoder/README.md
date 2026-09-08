@@ -1,135 +1,79 @@
-# RPico PIO Encoder
+# RP Pico PIO Encoder
 
-RPico custom encoder backend for uCNC using a PIO state machine to count
-quadrature A/B spindle encoder pulses.
+RP2040/RP2350 custom encoder backend for uCNC. Each configured driver instance
+uses one PIO state machine and can count either quadrature A/B input or a
+single undirectional pulse input.
 
-This module is used as an `ENC_TYPE_CUSTOM` encoder. The normal uCNC encoder
-module still owns the public encoder state and status fields, so seeing the
-standard `EC` and `RPM` status output is expected. The RPico PIO code is the
-backend behind `enc_custom_read()`.
+The generic encoder module continues to own position, direction inversion, RPM,
+index processing, virtual indexes, and status reporting. This module only
+provides the hardware count through the selected encoder's
+`enc_custom_read_encX()` callback.
 
-## Basic Configuration
+## Configuration
 
-Example for encoder 0:
+Example assigning PIO driver instance 0 to uCNC encoder 0:
 
 ```c
-#define ENABLE_RP2350_PIO_ENCODER
-
 #define ENCODERS 1
 #define ENC0_TYPE ENC_TYPE_CUSTOM
-
-#define ENC0_PULSE_GPIO 20  // A
-// B is ENC0_PULSE_GPIO + 1, so GPIO21 here.
-
-#define ENC0_INDEX_GPIO 26  // optional physical Z/index phase reference
-
-#define ENC0_PIO_INDEX 0
-#define ENC0_PIO_SM 0
-#define ENC0_MAX_STEP_RATE 0
-#define ENC0_PIO_PROGRAM_OFFSET 0
-
+#define ENC0_PULSE DIN0
+#define ENC0_DIR DIN1
 #define ENC0_IS_INCREMENTAL
+#define ENC0_NO_WRAP_CORRECTION
 #define ENC0_CPR 4000
 
-#define SPINDLE_PWM_RPM_ENCODER ENC0
-
-#define G33_ENCODER ENC0
-#define G33_FEEDBACK_LOOP_USE_HW_COUNTER
-
-#define ENC0_VIRTUAL_INDEX 1
-#define ENC0_VIRTUAL_INDEX_CPR (ENC0_CPR / 10)
-#define ENC0_VIRTUAL_INDEX_OFFSET 0
-#define ENC0_VIRTUAL_INDEX_HYSTERESIS 1
+#define RPICO_PIO_ENC0 ENC0
+#define RPICO_PIO0_INDEX 0
+#define RPICO_PIO0_SM 0
+#define RPICO_PIO0_MAX_STEP_RATE 0
 
 #define LOAD_MODULES_OVERRIDE() ({ \
-    LOAD_MODULE(rp2350_pio_encoder); \
-    LOAD_MODULE(g33); \
+    LOAD_MODULE(rpico_pio_encoder); \
 })
 ```
 
-`ENC0_CPR` should match the effective quadrature counts per spindle revolution.
-For a 1000 PPR encoder in x4 quadrature mode, use `4000`.
-
-## How G33 Uses It
-
-The PIO counter is the spindle position truth. The physical index GPIO is only a
-phase reference. G33 does not need to use the physical index directly; instead,
-this module emits the normal `enc0_index` hook at virtual modulo boundaries.
-
-With `ENC0_CPR = 4000` and `ENC0_VIRTUAL_INDEX_CPR = ENC0_CPR / 10`, a virtual index
-should be emitted every 400 encoder counts.
-
-In `G33_FEEDBACK_LOOP_USE_HW_COUNTER` mode:
-
-- raw PIO encoder counts provide the phase ruler
-- generic `encoder_get_rpm()` seeds the starting feed
-- virtual index hooks start and update the synchronized motion
-- timed virtual-index periods are not used as the main RPM source
-
-## Debug Output
-
-When `ENCODER_DEBUG_PRINT_100MS` is enabled, the generic encoder module prints:
-
-```text
-[EC:145837 RPM:208]
-```
-
-That still means the RPico PIO backend is being used when `ENC0_TYPE` is
+`RPICO_PIO_ENC0` through `RPICO_PIO_ENC7` are independent driver
+assignments. They may target any enabled uCNC encoder configured as
 `ENC_TYPE_CUSTOM`.
 
-This module also prints virtual index statistics:
+By default:
 
-```text
-[ENCIDX EC:145837 ECB:381 LAST:400 AVG:409.4 MIN:-4000 MAX:400 N:381 IGN:9 ISR:38]
-```
+- Driver instances 0-3 use PIO0 state machines 0-3.
+- Driver instances 4-7 use PIO1 state machines 0-3.
+- `RPICO_PIOx_INDEX`, `RPICO_PIOx_SM`, and
+  `RPICO_PIOx_MAX_STEP_RATE` can override those defaults independently.
 
-Fields:
+RP2350 may also use PIO index 2. RP2040 supports PIO indices 0 and 1.
 
-- `EC`: current encoder count reported through the normal encoder layer
-- `ECB`: live count since the last accepted virtual index
-- `LAST`: count between the last two virtual indexes
-- `AVG`: average absolute virtual-index spacing
-- `MIN`/`MAX`: observed virtual-index spacing range
-- `N`: accepted virtual-index events
-- `IGN`: skipped virtual slots during catch-up
-- `ISR`: physical index GPIO edges captured
+## Counter Mode
 
-For the 4000 CPR / 10 virtual index example, healthy steady-state output should
-show `LAST:400`. `IGN` may increase during startup or after stalls, but should
-not climb steadily during normal running.
+The assigned encoder's `ENCx_PULSE` and `ENCx_DIR` definitions select the
+mode automatically:
 
-## Original Failure Mode
+- Different pins select x4 quadrature counting. `DIR` must resolve to the GPIO
+  immediately following `PULSE`, as required by the canonical Raspberry Pi
+  quadrature PIO program.
+- Equal pins select a single undirectional pulse counter. It increments once on
+  every falling edge.
 
-The first symptom looked like the custom encoder was not initialized because only
-the standard `EC/RPM` debug line was visible. That was misleading: the standard
-line is printed by the generic encoder module even when the source is the RPico
-PIO custom backend.
+For quadrature, `ENCx_CPR` is the effective x4 count per revolution. For
+example, a 1000 PPR encoder uses a CPR of 4000. For single-wire input, CPR is
+the number of falling edges per revolution.
 
-There were three separate issues:
+Use `ENCx_IS_INCREMENTAL` so the generic encoder layer calculates deltas,
+direction inversion, and RPM. Use `ENCx_NO_WRAP_CORRECTION` because the PIO
+backend already exposes a continuous 32-bit counter.
 
-1. The RPico index debug helper only updated an internal string. It did not
-   print anything, so virtual-index health was invisible.
-2. The virtual-index task jumped directly to the newest crossed slot. At about
-   200 RPM with 10 virtual indexes per revolution, several slots could pass
-   between task calls. That produced `LAST:1600` or `LAST:2000` instead of
-   `LAST:400`, and G33 saw bad timing.
-3. G33 could start synchronized motion while the interpolator was still empty.
-   The log showed `G33 start ... empty=1`, followed by `st=2` forever. The move
-   was stuck in `SYNC_STARTING` because no synchronized segment had begun.
+## Core Integration
 
-The fix was:
+Because the encoder is `ENC_TYPE_CUSTOM`, `encoder.c` does not include its
+pulse pin in the software interrupt mask. The PIO state machine owns pulse
+acquisition, while `encoder.c` periodically reads the hardware counter through
+the generated custom callback.
 
-- print the RPico virtual-index debug line when debug is enabled
-- emit bounded catch-up virtual indexes instead of collapsing several slots into
-  one hook
-- seed G33 feed from the normal encoder RPM / raw hardware counter, not from
-  virtual-index timing
-- defer `itp_start(false)` until `itp_is_empty()` is false
+Physical index inputs remain on the normal `io_control.c` path. Configure
+`ENCx_INDEX`, `ENCx_VIRTUAL_INDEX`, and related options exactly as for other
+encoder backends.
 
-Healthy G33 logs should now show feed near spindle RPM for `K1`:
-
-```text
-[MSG:G33 init ... feed=208.000]
-[MSG:G33 start hw=... idx=1 empty=0]
-[MSG:G33 exp=... real=... err=0]
-```
+The legacy `PIO_ENC`, `PIO_ENC_INDEX`, `PIO_ENC_SM`, and
+`PIO_ENC_MAX_STEP_RATE` names remain accepted for driver instance 0.
